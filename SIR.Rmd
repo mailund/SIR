@@ -1,0 +1,281 @@
+---
+title: "Playing with the SIR model"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(tidyverse)
+library(deSolve)
+library(patchwork)
+```
+
+# The SIR model
+
+The SIR model is the simplest epidemiolgy model. You split the population into three groups, $S$ for susceptible, $I$ for infected, and $R$ for recovered (and this population is also immune). The total population size is $N$, it is used to scale the $\beta$ factor. When $I$ and $S$ meet, an $S$ is turned into an $I$ with rate $\beta$, and $S$ is automatically turned into $R$ at rate $\gamma$. The differential equations are:
+
+$$
+\begin{array}
+\ \dot{S} = -\beta IS / N\\
+\dot{I} = \beta IS / N - \gamma I \\
+\dot{R} = \gamma I 
+\end{array}
+$$
+
+
+```{r}
+changes <- function(t, x, params) {
+  S = x[1] ; I = x[2] ; R = x[3]
+  beta = params["beta"]
+  gamma = params["gamma"]
+  N = params["N"]
+  dS = - beta * I * S / N
+  dI = beta * I * S / N - gamma * I
+  dR = gamma * I
+  list(c(dS, dI, dR))
+}
+```
+
+
+The initial rate of infection is $R_0 = \beta/\gamma$ and herd immunity, the point at which a pandemic will die out, is $1-1/R_0$. With the parameters below, we get the population dynamics in the plot. The red horizontal line is the peak number of infected while the blue horizontal line is the herd immunity level.
+
+```{r}
+N <- 1000
+params <- c(beta = 2, gamma = 0.9, N = N)
+start <- c(N - 1, 1, 0)
+times <- seq(0, 50, length.out = 100)
+res <- ode(
+  y = start, times = times,
+  func = changes, parms = params
+)
+
+R0 <- params["beta"] / params["gamma"]
+herd_immunity = 1 - 1/R0
+res <- as_tibble(res)
+names(res) <- c("Time", "S", "I", "R")
+res %>% 
+  gather(Population, Numbers, -Time) %>%
+  ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
+  geom_line() +
+  geom_hline(yintercept = max(res$I) / N, color = 'red') +
+  geom_hline(yintercept = herd_immunity, color = 'blue') +
+  theme_classic() +
+  ylab("Population fraction") + ylim(0, 1)
+
+```
+
+The number of recovered people, which corresponds to those that have already been infected but also to the part of the population that contribute to herd immunity, is much larger than the threshold for herd immunity. The reson for this is that the infected people when the population hits that threshold. When $I+R$ are above the line, the growth of infected stops, but it doesn't go to zero right away. So you expect to infect a lot more people than you need for herd immunity. This is called *spill over*. In this simulation, the number of recovered at the end is `r round(max(res$R / params["N"]), 2)` while the threshold is `r herd_immunity `. The peak number of infected--corresponding to the maximum load of hospitals--is `r round(max(res$I / params["N"]), 2)`
+
+## Recurring epidemics
+
+If we have been hit by an epidemic, some people are recovered, but it won't be all. The epidemic burns out before 100% of the population has been infected. This means that we can be hit again by the disease that nows try to infect the remaining suscepable. If we have herd immunity, the epidemic won't get started. It will burn out before it gets many infected; in this continuous model it won't infect anyone, but of course, in a discreate model with some stochasticity, it will. It will burn out extremely quickly, though, and we won't have an epidemic. But if the recovered are below the herd immunity level, for example because we took measures to lower the infection rate in the first epidemic to bring down $R_0=\beta/\gamma$ (by reducing $\beta$), we could see a second wave. Let us add to the model a number of previously infected by setting the start state with some recovered.
+
+```{r}
+initial_immune <- 200
+start <- c(N - initial_immune - 1, 1, initial_immune)
+times <- seq(0, 50, length.out = 100)
+res <- ode(
+  y = start, times = times,
+  func = changes, parms = params
+)
+
+R0 <- params["beta"] / params["gamma"]
+herd_immunity = 1 - 1/R0
+res <- as_tibble(res)
+names(res) <- c("Time", "S", "I", "R")
+res %>% 
+  gather(Population, Numbers, -Time) %>%
+  ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
+  geom_line() +
+  geom_hline(yintercept = max(res$I) / N, color = 'red') +
+  geom_hline(yintercept = herd_immunity, color = 'blue') +
+  theme_classic() +
+  ylab("Population fraction") + ylim(0, 1)
+```
+
+In this simulation, the number of recovered at the end is `r round(max(res$R / params["N"]), 2)` while the threshold is still `r herd_immunity `. The peak number of infected this time is `r round(max(res$I / params["N"]), 2)`. The recovered at the end of the run is the number of infected in both epidemics. You need the area under the curve of the $I$ line to get how many were infected in this particular epidemic. I'm not sure exactly how to do this so it is scaled correctly relative to the other numbers, since the curve involves the same number of people at different phases of the disease, but I will use the simple sum of the measurement points below. I will use it as a measure of the severity of a second wave as a function of how many got immune in the first wave.
+
+```{r}
+initial_immune <- seq(1, 500, by = 10)
+max_infect <- c()
+sum_infect <- c()
+recovered <- c()
+for (init_im in initial_immune) {
+  start <- c(N - init_im - 1, 1, init_im)
+  res <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+  res <- as_tibble(res)
+  names(res) <- c("Time", "S", "I", "R")
+  max_infect[length(max_infect) + 1] <- max(res$I)
+  sum_infect[length(sum_infect) + 1] <- sum(res$I)
+  recovered[length(recovered) + 1] <- max(res$R)
+}
+total_infections <- tibble(`Initial Immune` = initial_immune / N, 
+                           `Max Infected` = max_infect / N,
+                           `Sum Infected` = sum_infect / N,
+                           `Recovered` = recovered / N)
+
+peak_inf <- total_infections %>% ggplot(aes(x = `Initial Immune`, y = `Max Infected`)) +
+  geom_line() +
+  theme_classic() +
+  xlab("Fraction initially immune") + ylab("Peak Infected")
+
+sum_inf <- total_infections %>% ggplot(aes(x = `Initial Immune`, y = `Sum Infected`)) +
+  geom_line() +
+  theme_classic() +
+  xlab("Fraction initially immune") + ylab("Sum Infected")
+
+max_rec <- total_infections %>% ggplot(aes(x = `Initial Immune`, y = `Recovered`)) +
+  geom_line() +
+  theme_classic() +
+  xlab("Fraction initially immune") + ylab("Recovered")
+
+peak_inf / sum_inf / max_rec
+```
+
+It helps a lot if some are immune after the first wave. The peak number of infected are lower, the total number of infected is lower, and although the number of recovered still need to get above the herd immunity threashold in the second wave, since I don't stop the epidemic before it burns out, the number of recovered *still* decreases. This is simply because there is less spill over. We don't get as many infected at the time we pass the threshold, so they don't infect that many at this point, and the total number of people infected in *both* waves is lower.
+
+## Waves with restrictions
+
+For the above to make sense, we need to infect some people in the first wave and then others in the second. If we let the epidemic burn through the population in the first wave, then the number of recoved will be above the herd immunity threshold and nothing happens in the second wave; and the total number of infected in both waves is the same as the total number from the first wave. So to gain anything from immunity if there are several waves, we need to consider a case where the first wave infects fewer people so it doesn't take us far above the threshold. We can do that by decreasing the infection rate, $\beta$ in the first wave by whatever measures we find necessary, for example social distancing.
+
+```{r}
+N <- 1000
+beta <- 3
+
+start <- c(N - 1, 1, 0)
+times <- seq(0, 100, length.out = 100)
+params <- c(beta = beta, gamma = 0.9, N = N)
+res <- ode(
+  y = start, times = times,
+  func = changes, parms = params
+)
+
+R0 <- beta / params["gamma"]
+herd_immunity = 1 - 1/R0
+res <- as_tibble(res)
+names(res) <- c("Time", "S", "I", "R")
+no_intervention <- res %>% 
+  gather(Population, Numbers, -Time) %>%
+  ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
+  geom_line() +
+  #geom_hline(yintercept = max(res$I) / N, color = 'red') +
+  geom_hline(yintercept = herd_immunity, color = 'blue') +
+  theme_classic() +
+  ggtitle("Without intervetion, the epidemic runs until it burns out.", 
+          subtitle = paste0("Infection rate beta = ", beta, ", ",
+                            "total infected = ", 100 * round(max(res$R) / N, 2), "%, ",
+                            "peak infected = ", 100 * round(max(res$I) / N, 2), "%")) +
+  ylab("Population fraction") + ylim(0, 1)
+
+start <- c(N - 1, 1, 0)
+times <- seq(0, 33, length.out = 33)
+params <- c(beta = beta / 2, gamma = 0.9, N = N)
+res1 <- ode(
+  y = start, times = times,
+  func = changes, parms = params
+)
+
+start <- res1[33,2:4]
+times <- seq(33, 100, length.out = 66)
+params <- c(beta = beta, gamma = 0.9, N = N)
+res2 <- ode(
+  y = start, times = times,
+  func = changes, parms = params
+)
+
+res <- rbind(res1, res2)
+R0 <- beta / params["gamma"]
+herd_immunity = 1 - 1/R0
+res <- as_tibble(res)
+names(res) <- c("Time", "S", "I", "R")
+with_intervention <- res %>% 
+  gather(Population, Numbers, -Time) %>%
+  ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
+  geom_line() +
+  #geom_hline(yintercept = max(res$I) / N, color = 'red') +
+  geom_hline(yintercept = herd_immunity, color = 'blue') +
+  geom_vline(xintercept = 33, show.legend = TRUE) +
+  theme_classic() +
+  ggtitle("With intervention, half infection rate for the first third of the epidemic.", 
+          subtitle = paste0("Infection rate beta = ", beta, ", ",
+                            "total infected = ", 100 * round(max(res$R) / N, 2), "%, ",
+                            "peak infected = ", 100 * round(max(res$I) / N, 2), "%")) +
+  ylab("Population fraction") + ylim(0, 1)
+
+
+no_intervention / with_intervention
+```
+
+
+
+```{r}
+N <- 1000
+beta <- 2.5
+
+start <- c(N - 1, 1, 0)
+times <- seq(0, 100, length.out = 100)
+params <- c(beta = beta, gamma = 0.9, N = N)
+res <- ode(
+  y = start, times = times,
+  func = changes, parms = params
+)
+
+R0 <- beta / params["gamma"]
+herd_immunity = 1 - 1/R0
+res <- as_tibble(res)
+names(res) <- c("Time", "S", "I", "R")
+no_intervention <- res %>% 
+  gather(Population, Numbers, -Time) %>%
+  ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
+  geom_line() +
+  #geom_hline(yintercept = max(res$I) / N, color = 'red') +
+  geom_hline(yintercept = herd_immunity, color = 'blue') +
+  theme_classic() +
+  ggtitle("Without intervetion, the epidemic runs until it burns out.", 
+          subtitle = paste0("Infection rate beta = ", beta, ", ",
+                            "total infected = ", 100 * round(max(res$R) / N, 2), "%, ",
+                            "peak infected = ", 100 * round(max(res$I) / N, 2), "%")) +
+  ylab("Population fraction") + ylim(0, 1)
+
+start <- c(N - 1, 1, 0)
+times <- seq(0, 33, length.out = 33)
+params <- c(beta = beta / 2, gamma = 0.9, N = N)
+res1 <- ode(
+  y = start, times = times,
+  func = changes, parms = params
+)
+
+start <- res1[33,2:4]
+times <- seq(33, 100, length.out = 66)
+params <- c(beta = beta, gamma = 0.9, N = N)
+res2 <- ode(
+  y = start, times = times,
+  func = changes, parms = params
+)
+
+res <- rbind(res1, res2)
+R0 <- beta / params["gamma"]
+herd_immunity = 1 - 1/R0
+res <- as_tibble(res)
+names(res) <- c("Time", "S", "I", "R")
+with_intervention <- res %>% 
+  gather(Population, Numbers, -Time) %>%
+  ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
+  geom_line() +
+  #geom_hline(yintercept = max(res$I) / N, color = 'red') +
+  geom_hline(yintercept = herd_immunity, color = 'blue') +
+  geom_vline(xintercept = 33, show.legend = TRUE) +
+  theme_classic() +
+  ggtitle("With intervention, half infection rate for the first third of the epidemic.", 
+          subtitle = paste0("Infection rate beta = ", beta, ", ",
+                            "total infected = ", 100 * round(max(res$R) / N, 2), "%, ",
+                            "peak infected = ", 100 * round(max(res$I) / N, 2), "%")) +
+  ylab("Population fraction") + ylim(0, 1)
+
+
+no_intervention / with_intervention
+```
