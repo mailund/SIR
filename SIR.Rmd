@@ -211,9 +211,8 @@ no_intervention / with_intervention
 ```
 
 
-
 ```{r}
-N <- 1000
+N <- 10000
 beta <- 2.5
 
 start <- c(N - 1, 1, 0)
@@ -232,7 +231,6 @@ no_intervention <- res %>%
   gather(Population, Numbers, -Time) %>%
   ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
   geom_line() +
-  #geom_hline(yintercept = max(res$I) / N, color = 'red') +
   geom_hline(yintercept = herd_immunity, color = 'blue') +
   theme_classic() +
   ggtitle("Without intervetion, the epidemic runs until it burns out.", 
@@ -279,3 +277,71 @@ with_intervention <- res %>%
 
 no_intervention / with_intervention
 ```
+
+It looks like it can matter a lot for the total number that gets affected that you take it slow to get to the herd immunity threshold. The slower the better, so if there are no other constraints, go as slow as you can. Of course, if there are no constraints other than keeping the infection in check, then you should stay in the intervention phase forever, and you wouldn't need to get to the threshold for the larger rate at all. But all is not equal, at some point you need to lift the restrictions again. So it is interesting to know what the effects are of how much you reduce the infection in the intervetion stage and how long you keep that stage going.
+
+```{r}
+N <- 10000
+intervention_results <- function(beta, intervention_time, depression) {
+  params["beta"] <- beta
+  intervention_beta <- beta/depression
+  
+  start <- c(N - 1, 1, 0)
+  max_time <- 500 # very high because I want to make sure we get to the limit...
+  times <- seq(0, intervention_time, length.out = intervention_time)
+  params <- c(beta = intervention_beta, gamma = 0.9, N = N)
+  res1 <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+
+  start <- res1[intervention_time,2:4]
+  times <- seq(intervention_time, max_time, length.out = max_time - intervention_time)
+  params <- c(beta = beta, gamma = 0.9, N = N)
+  res2 <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+
+  res <- rbind(res1, res2)
+  R0 <- beta / params["gamma"]
+  herd_immunity = 1 - 1/R0
+  res <- as_tibble(res)
+  names(res) <- c("Time", "S", "I", "R")
+
+  c(beta = beta, 
+    `Intervention Time` = intervention_time,
+    `Intervention Depression` = depression,
+    `Total Infected` = max(res$R) / N, 
+    `Peak Infected` = max(res$I) / N,
+    R0 = beta / 0.9)
+}
+
+
+
+depressions <- seq(1, 5, length.out = 100)
+betas <- 2:5
+lengths <- c(10, 20, 30, 40, 50, 60)
+parameters <- crossing(depressions = depressions,
+                       betas = betas,
+                       lengths = lengths)
+
+tbl <- Vectorize(intervention_results)(parameters$betas, parameters$lengths, parameters$depressions)
+tbl <- as_tibble(t(tbl))
+```
+
+```{r}
+tbl %>% mutate(`Intervention Time` = as_factor(`Intervention Time`)) %>%
+  ggplot(aes(x = `Intervention Depression`, y = `Total Infected`, color = `Intervention Time`)) +
+  facet_grid(~beta) +
+  geom_line() +
+  geom_hline(aes(yintercept = 1 - 1/R0)) +
+  ggtitle("Effect of length and intensity of intervention") +
+  xlab("Intervention depression (factor with which the infection is reduced)") +
+  ylab("Total number of infected througout the epidemic") +
+  scale_colour_discrete(name = "Length intervention") +
+  theme_classic()
+```
+
+The plot is for five values of $\beta$ (the columns, values 2 to 5). In the end, all curves have to go above the threshold (black lines), but the intervetion matters substantially. (The two places where the values are below the black lines are caused by numerical issues). The longer the intervention, the better, but you have a sweet spot for the depression. If you depress too little, you might as well not do it, and if you depress too much and then let loose, you don't have enough recovered to make a difference. 
+
