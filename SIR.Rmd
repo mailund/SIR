@@ -1,8 +1,5 @@
 ---
 title: "Playing with the SIR model"
-output:
-  html_document:
-    df_print: paged
 ---
 
 ```{r message=FALSE, warning=FALSE, paged.print=FALSE}
@@ -367,8 +364,7 @@ library(lamW)
 ```
 
 ```{r}
-recovered_limit <- function(R0, s0 = 1, r0 = 0) {
-  s0 <- 1 ; r0 <- 0
+recovered_limit <- function(R0, r0 = 0, s0 = 1 - r0) {
   s_inf <- -1/R0 * lambertW0(-s0 * R0 * exp(-R0 * (1 - r0)))
   r_inf <- 1 - s_inf
   r_inf
@@ -414,4 +410,34 @@ overshoot %>% ggplot(aes(x = R0, `Herd Immunity Threshold`)) +
 The two numbers show the case for a 60% herd immunity threshold.
 
 There is a large difference between the two lines, so again we see that going to a specific immunity limit the direct way is a bad idea.
+
+The equation tells us how many recovered we have at the end of an epidemic but also allows us to see how it depends on the number of recovered we have at the beginning of the epidemic.
+
+
+```{r}
+gamma <- 0.9
+betas <- c(2, 2.5, 3)
+initial_immune <- seq(0.4, 0.8, length.out = 100)
+
+final_recovered <- function(beta, initial_immune) {
+  R0 <- beta/gamma
+  herd <- 1 - 1/R0
+  recovered_limit(R0, initial_immune)
+}
+
+parameters <- crossing(betas, initial_immune)
+parameters <- parameters %>%
+  mutate(R0 = betas/gamma, `Herd Threshold` = 1 - 1/R0,
+         `Total Recovered` = final_recovered(betas, initial_immune))
+
+parameters %>%
+  ggplot(aes(x = initial_immune, y = `Total Recovered` - initial_immune, color = as.factor(betas))) +
+  geom_vline(aes(xintercept = `Herd Threshold`), linetype = 'dashed') +
+  scale_color_discrete(expression(beta)) +
+  geom_line() +
+  xlab("Initial fraction immune") + ylab("Extra infected") +
+  theme_classic()
+
+```
+
 
