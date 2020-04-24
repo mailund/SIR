@@ -350,3 +350,68 @@ tbl %>% mutate(`Intervention Time` = as_factor(`Intervention Time`)) %>%
 
 The plot is for five values of $\beta$ (the columns, values 2 to 5). In the end, all curves have to go above the threshold (black horizontal lines), but the intervetion matters substantially. (The two places where the values are below the black lines are caused by numerical issues). The longer the intervention, the better, but you have a sweet spot for the depression. If you depress too little, you might as well not do it, and if you depress too much and then let loose, you don't have enough recovered to make a difference. The non-horizontal black line is the immunity threshold during intervention. This value, together with the intervention length, determines when we start the final phase. The idea situation is if we end the intervention stage at a point where the number of recovered is at the threshold--or a little later to avoid also starting the next phase with many infected.
 
+## Final number of infected, analytical
+
+The number of infected at the end of an epidemic, with the SIR model, has an analytical soltion:
+
+$$s_\infty = -R_0^{-1} W(-s_0 R_0 \exp(-R_0(1-r_0)))$$
+
+where $W$ is the Lambert W function.
+
+At the end of the process, there will be no infected (the epidemic has run its course), so the number of recovered is:
+
+$$r_\infty = 1 - s_\infty$$
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(lamW)
+```
+
+```{r}
+recovered_limit <- function(R0, s0 = 1, r0 = 0) {
+  s0 <- 1 ; r0 <- 0
+  s_inf <- -1/R0 * lambertW0(-s0 * R0 * exp(-R0 * (1 - r0)))
+  r_inf <- 1 - s_inf
+  r_inf
+}
+herd_immunity <- function(R0) 1 - 1/R0
+```
+
+We can use this to see how much overshoot we have if we let the model run to completion.
+
+```{r}
+R0 <- seq(1,10,length.out = 1000)
+overshoot <- tibble(
+  R0 = R0,
+  `Herd Immunity Threshold` = herd_immunity(R0),
+  `Total Infected` = recovered_limit(R0)
+)
+
+immunity_you_want <- 0.6
+cut_index <- which(overshoot$`Herd Immunity Threshold` > immunity_you_want)[1]
+cut_R0 <- overshoot$R0[cut_index]
+herd_level <- overshoot$`Herd Immunity Threshold`[cut_index]
+infected_level <- overshoot$`Total Infected`[cut_index]
+
+overshoot %>% ggplot(aes(x = R0, `Herd Immunity Threshold`)) +
+  geom_line(color = 'blue') +
+  geom_line(aes(y = `Total Infected`), color = 'red') +
+  geom_hline(yintercept = 0.6, linetype = 'dashed') +
+  geom_point(aes(x = cut_R0, y = herd_level), color = 'blue') +
+  geom_text(aes(x = cut_R0, y = herd_level, 
+                label = paste0(round(herd_level, 2) * 100, '%')), 
+            nudge_x = 0.3, nudge_y = -0.05, color = 'blue') +
+  geom_point(aes(x = cut_R0, y = infected_level), color = 'red') +
+  geom_text(aes(x = cut_R0, y = infected_level, 
+                label = paste0(round(infected_level, 2) * 100, '%')), 
+            nudge_x = 0.3, nudge_y = -0.05, color = 'red') +
+  ggtitle("Herd immunity threshold versus total infected",
+          subtitle = paste("Recovered to achive herd immunity, blue, ",
+                           "number of people infected in the process, red.")) +
+  xlab(expression(R[0])) + ylab("Fraction of population") +
+  theme_classic()
+```
+
+The two numbers show the case for a 60% herd immunity threshold.
+
+There is a large difference between the two lines, so again we see that going to a specific immunity limit the direct way is a bad idea.
+
