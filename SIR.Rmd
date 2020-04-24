@@ -306,22 +306,25 @@ intervention_results <- function(beta, intervention_time, depression) {
   res <- rbind(res1, res2)
   R0 <- beta / params["gamma"]
   herd_immunity = 1 - 1/R0
+  res1 <- as_tibble(res1)
+  names(res1) <- c("Time", "S", "I", "R")
   res <- as_tibble(res)
   names(res) <- c("Time", "S", "I", "R")
-
+  
   c(beta = beta, 
     `Intervention Time` = intervention_time,
     `Intervention Depression` = depression,
     `Total Infected` = max(res$R) / N, 
     `Peak Infected` = max(res$I) / N,
+    `Intervention Total` = max(res1$R) / N,
+    `Infected at Shift` = res1$I[intervention_time],
+    `Intervention R0` = intervention_beta / 0.9,
     R0 = beta / 0.9)
 }
 
-
-
 depressions <- seq(1, 5, length.out = 100)
 betas <- 2:5
-lengths <- c(10, 20, 30, 40, 50, 60)
+lengths <- c(10, 20, 30, 40, 50, 60, 70)
 parameters <- crossing(depressions = depressions,
                        betas = betas,
                        lengths = lengths)
@@ -336,6 +339,8 @@ tbl %>% mutate(`Intervention Time` = as_factor(`Intervention Time`)) %>%
   facet_grid(~beta) +
   geom_line() +
   geom_hline(aes(yintercept = 1 - 1/R0)) +
+  geom_line(aes(y = pmax(0, 1 - 1/`Intervention R0`)), color = 'black') +
+  geom_line(aes(y = `Intervention Total`), linetype = "dashed") +
   ggtitle("Effect of length and intensity of intervention") +
   xlab("Intervention depression (factor with which the infection is reduced)") +
   ylab("Total number of infected througout the epidemic") +
@@ -343,5 +348,5 @@ tbl %>% mutate(`Intervention Time` = as_factor(`Intervention Time`)) %>%
   theme_classic()
 ```
 
-The plot is for five values of $\beta$ (the columns, values 2 to 5). In the end, all curves have to go above the threshold (black lines), but the intervetion matters substantially. (The two places where the values are below the black lines are caused by numerical issues). The longer the intervention, the better, but you have a sweet spot for the depression. If you depress too little, you might as well not do it, and if you depress too much and then let loose, you don't have enough recovered to make a difference. 
+The plot is for five values of $\beta$ (the columns, values 2 to 5). In the end, all curves have to go above the threshold (black horizontal lines), but the intervetion matters substantially. (The two places where the values are below the black lines are caused by numerical issues). The longer the intervention, the better, but you have a sweet spot for the depression. If you depress too little, you might as well not do it, and if you depress too much and then let loose, you don't have enough recovered to make a difference. The non-horizontal black line is the immunity threshold during intervention. This value, together with the intervention length, determines when we start the final phase. The idea situation is if we end the intervention stage at a point where the number of recovered is at the threshold--or a little later to avoid also starting the next phase with many infected.
 
