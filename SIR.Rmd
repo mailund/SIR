@@ -193,7 +193,6 @@ with_intervention <- res %>%
   gather(Population, Numbers, -Time) %>%
   ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
   geom_line() +
-  #geom_hline(yintercept = max(res$I) / N, color = 'red') +
   geom_hline(yintercept = herd_immunity, color = 'blue') +
   geom_vline(xintercept = 33, show.legend = TRUE) +
   theme_classic() +
@@ -261,7 +260,6 @@ with_intervention <- res %>%
   gather(Population, Numbers, -Time) %>%
   ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
   geom_line() +
-  #geom_hline(yintercept = max(res$I) / N, color = 'red') +
   geom_hline(yintercept = herd_immunity, color = 'blue') +
   geom_vline(xintercept = 33, show.legend = TRUE) +
   theme_classic() +
@@ -346,6 +344,7 @@ tbl %>% mutate(`Intervention Time` = as_factor(`Intervention Time`)) %>%
 ```
 
 The plot is for five values of $\beta$ (the columns, values 2 to 5). In the end, all curves have to go above the threshold (black horizontal lines), but the intervetion matters substantially. (The two places where the values are below the black lines are caused by numerical issues). The longer the intervention, the better, but you have a sweet spot for the depression. If you depress too little, you might as well not do it, and if you depress too much and then let loose, you don't have enough recovered to make a difference. The non-horizontal black line is the immunity threshold during intervention. This value, together with the intervention length, determines when we start the final phase. The idea situation is if we end the intervention stage at a point where the number of recovered is at the threshold--or a little later to avoid also starting the next phase with many infected.
+
 
 ## Final number of infected, analytical
 
@@ -440,4 +439,188 @@ parameters %>%
 
 ```
 
+The result is similar to what we saw much earlier when we got the numbers from evaluating the ODE, but this time we cannot get the peak number of infected during the stage; we do not have an equation for that.
+
+
+## Planning the intervention once we know the infection rate
+
+We can work out what we need to set a rate to, to get to any desired herd immunity given by another rate.
+
+```r
+  root_function <- function(reduced_beta) {
+    herd_immunity(beta/gamma) - recovered_limit(reduced_beta/gamma)
+  }
+  reduced_beta <- uniroot(root_function, interval = c(1, 5))$root
+```
+
+I try that in these figures:
+
+```{r}
+gamma <- 0.9 ; N <- 1000 ; end_time <- 50
+
+compute_single_phase <- function(beta) {
+  start <- c(N - 1, 1, 0)
+  times <- seq(0, end_time, length.out = 100)
+  params <- c(beta = beta, gamma = gamma, N = N)
+  res <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+  res <- as_tibble(res)
+  names(res) <- c("Time", "S", "I", "R")
+  res$`Herd Immunity` = 1 - 1/(beta/gamma)
+  res$`Intervention End` <- NA
+  res$`Reduced Beta` <- NA
+  res
+}
+
+
+compute_two_phases <- function(beta, intervention_time = 25) {
+  # Figure out how much we should reduce the spread in the first phase
+  root_function <- function(reduced_beta) {
+    herd_immunity(beta/gamma) - recovered_limit(reduced_beta/gamma)
+  }
+  reduced_beta <- uniroot(root_function, interval = c(1, 5))$root
+  
+  start <- c(N - 1, 1, 0)
+  times <- seq(0, intervention_time, length.out = intervention_time)
+  params <- c(beta = reduced_beta, gamma = gamma, N = N)
+  res1 <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+  
+  start <- res1[intervention_time, 2:4]
+  times <- seq(intervention_time, end_time, length.out = 100 - intervention_time)
+  params <- c(beta = reduced_beta, gamma = gamma, N = N)
+  res2 <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+  
+  res <- rbind(res1, res2)
+  res <- as_tibble(res)
+  names(res) <- c("Time", "S", "I", "R")
+  res$`Herd Immunity` <- 1 - 1/(beta/gamma)
+  res$`Intervention End` <- intervention_time
+  res$`Reduced Beta` <- reduced_beta
+  res
+}
+
+make_comparison_plot <- function(beta) {
+  res1 <- compute_single_phase(beta) ; res1$Scenario <- "No intervention"
+  res2 <- compute_two_phases(beta, intervention_time = 20) ; res2$Scenario <- "Intervention"
+
+  res2 %>% gather(Population, Numbers, S:R) %>%
+    ggplot(aes(x = Time, y = Numbers / N, color = Population)) +
+    geom_line() +
+    geom_line(data = res1 %>% gather(Population, Numbers, S:R), linetype = 'dashed') +
+    geom_hline(aes(yintercept = `Herd Immunity`), linetype = 'dashed') +
+    geom_vline(aes(xintercept = `Intervention End`), linetype = 'dashed') +
+    theme_classic() +
+    ggtitle("With and without intervention.", 
+            subtitle = paste0("Original beta = ", beta, ", ",
+                              "intervention beta = ", round(min(res2$`Reduced Beta`, na.rm = TRUE), 2), ", ",
+                              "peak infected = ", 100 * round(max(res2$I) / N, 2), "%")) +
+    ylab("Population fraction") + ylim(0, 1)
+}
+
+make_comparison_plot(1.5)
+make_comparison_plot(2.5)
+make_comparison_plot(3.5)
+
+```
+
+```{r}
+find_reduced <- function(beta, gamma) {
+  root_function <- function(reduced_beta) {
+    herd_immunity(beta/gamma) - recovered_limit(reduced_beta/gamma)
+  }
+  reduced_beta <- uniroot(root_function, interval = c(0.1, 5))$root
+  reduced_beta
+}
+find_reduced <- Vectorize(find_reduced)
+
+eval_to_t <- function(t, beta, gamma) {
+  params = c(beta = beta, gamma = gamma, N = N)
+  start <- c(N - 1, 1, 0)
+  times <- seq(0, t, length.out = max(10,t))
+  res <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+  res[t,4] / N
+}
+eval_to_t <- Vectorize(eval_to_t)
+
+peak_infected <- function(beta, gamma) {
+  params = c(beta = beta, gamma = gamma, N = N)
+  start <- c(N - 1, 1, 0)
+  times <- seq(0, 100, length.out = 100)
+  res <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+  res <- as_tibble(res)
+  names(res) <- c("Time", "R", "I", "S")
+  max(res$I / N)
+}
+peak_infected <- Vectorize(peak_infected)
+
+
+find_time <- function(beta, reduced_beta, gamma, epsilon = 0.01) {
+  distance <- function(t) {
+    herd_immunity(beta/gamma) - eval_to_t(t, reduced_beta, gamma)
+  }
+
+  for (t in 2:100) {
+    if (distance(t) < epsilon) break
+  }
+  return(t)
+}
+find_time <- Vectorize(find_time)
+
+tbl <- crossing(beta = seq(1,5, length.out = 9),
+                gamma = seq(0.5, 0.9, length.out = 3))
+tbl <- tbl %>% mutate(
+  reduced_beta = find_reduced(beta, gamma),
+  intervention_time = find_time(beta, reduced_beta, gamma),
+  peak_infected = peak_infected(reduced_beta, gamma),
+  gamma = as_factor(gamma)
+)
+```
+
+```{r}
+tbl %>%
+  ggplot(aes(x = beta, y = reduced_beta, color = gamma)) +
+  geom_line() +
+  scale_color_discrete(expression(gamma)) +
+  ggtitle("Reduction factor to go to the herd immunity for a given infection rate\nwithout overspill",
+          subtitle = expression("To reach the herd immunity for infection rate " * beta *
+                           " you need to depress the infection rate to " * beta[R])) +
+  xlab(expression(beta)) + ylab(expression(beta[R])) +
+  theme_classic()
+```
+
+```{r}
+tbl %>%
+  ggplot(aes(x = beta, y = intervention_time, color = gamma)) +
+  geom_point() + geom_line() +
+  scale_color_discrete(expression(gamma)) +
+  ggtitle("Length of the intervention with an optimal reduced infection rate") +
+  xlab(expression(beta)) + ylab("Length of the necessary intervention interval") +
+  theme_classic()
+```
+
+
+```{r}
+tbl %>%
+  ggplot(aes(x = beta, y = peak_infected, color = gamma)) +
+  geom_point() + geom_line() +
+  scale_color_discrete(expression(gamma)) +
+  ggtitle("Peak number of infected",
+          subtitle = "The peak number of infected when taking the optimal path to herd immunity") +
+  xlab(expression(beta)) + ylab("Length of the necessary intervention interval") +
+  theme_classic()
+```
 
