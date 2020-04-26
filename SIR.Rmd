@@ -541,14 +541,7 @@ find_reduced <- function(beta, gamma) {
 }
 find_reduced <- Vectorize(find_reduced)
 
-eval_to_t <- function(t, beta, gamma) {
-  params = c(beta = beta, gamma = gamma, N = N)
-  start <- c(N - 1, 1, 0)
-  times <- seq(0, t, length.out = max(10,t))
-  res <- ode(
-    y = start, times = times,
-    func = changes, parms = params
-  )
+eval_to_t <- function(t, res) {
   res[t,4] / N
 }
 eval_to_t <- Vectorize(eval_to_t)
@@ -569,8 +562,16 @@ peak_infected <- Vectorize(peak_infected)
 
 
 find_time <- function(beta, reduced_beta, gamma, epsilon = 0.01) {
+  params = c(beta = reduced_beta, gamma = gamma, N = N)
+  start <- c(N - 1, 1, 0)
+  times <- seq(0, 100, length.out = 100)
+  res <- ode(
+    y = start, times = times,
+    func = changes, parms = params
+  )
+
   distance <- function(t) {
-    herd_immunity(beta/gamma) - eval_to_t(t, reduced_beta, gamma)
+    herd_immunity(beta/gamma) - eval_to_t(t, res)
   }
 
   for (t in 2:100) {
